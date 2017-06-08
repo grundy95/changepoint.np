@@ -4,13 +4,13 @@
 #' @param data A vector, ts object or matrix containing the data within which you wish to find a changepoint.  If the data is a matrix, each row is considered as a separate dataset.
 #' @param penalty Choice of "None", "SIC", "BIC", "MBIC", AIC", "Hannan-Quinn", "Manual" and "CROPS" penalties.  If Manual is specified, the manual penalty is contained in the pen.value parameter. If CROPS is specified, the penalty range is contained in the pen.value parameter; note this is a vector of length 2 which contains the minimum and maximum penalty value.  Note CROPS can only be used if the method is "PELT". The predefined penalties listed DO count the changepoint as a parameter, postfix a 0 e.g."SIC0" to NOT count the changepoint as a parameter.
 #' @param pen.value The value of the penalty when using the Manual penalty option.  A vector of length 2 (min,max) if using the CROPS penalty.
-#' @param method Currently the only method is "PELT".
-#' @param test.stat The assumed test statistic/distribution of the data. Currently only "empirical_distribution".
+#' @param method There are two methods available "PELT" and "FPOP".
+#' @param test.stat The assumed test statistic/distribution of the data. If using the "PELT" method, currently only "empirical_distribution" is available. For the "FPOP" method, "L1", "Huber", and "Outlier" are available.
 #' @param class Logical. If TRUE then an object of class cpt is returned.
 #' @param minseglen Positive integer giving the minimum segment length (number of observations between changes), default is the minimum allowed by theory.
-#' @param nquantiles The number of quantiles to calculate when test.stat = "empirical_distribution".
+#' @param test.param Additional values required by methods and/or distributions. .For test.stat = "empirical_distribution", this is the number of quantiles to calculate; For method == "FPOP", this is the lthreshold.
 #'
-#' @details This function is used to find multiple changes in a data set using the changepoint algorithm PELT with a nonparametric cost function based on the empirical distribution.  A changepoint is denoted as the first observation of the new segment.
+#' @details This function is used to find multiple changes in a data set using either of two changepoint algorithms. The two choices are:PELT with a nonparametric cost function based on the empirical distribution; and "FPOP" with a nonparametric cost function based on the L1, Huber or Outlier loss.  A changepoint is denoted as the first observation of the new segment.
 #' @return  If \code{class=TRUE} then an object of S4 class "cpt" is returned.  The slot \code{cpts} contains the changepoints that are returned.  For \code{class=FALSE} the structure is as follows.
 #'
 #' If data is a vector (single dataset) then a vector/list is returned depending on the value of method.  If data is a matrix (multiple datasets) then a list is returned where each element in the list is either a vector or list depending on the value of method.
@@ -24,6 +24,8 @@
 #' @references PELT with an Empirical Distribution cost function: Haynes K, Fearnhead P, Eckley I A (2016) A computationally efficient nonparametric approach for changepoint detection, Statistics and Computed (accepted)
 #' @references PELT Algorithm: Killick R, Fearnhead P, Eckley I A (2012) Optimal detection of changepoints with a linear computational cost, \emph{JASA 107(500), 1590-1598}
 #' @references CROPS: Haynes K, Eckley I A, Fearnhead P (2015) Computationally Efficient Changepoint Detection for a Range of Penalties, \emph{JCGS, To Appear}
+#' @references FPOP with L1, Huber and Outlier Losses: Paul Fearnhead, Guillem Rigaill (2016) Changepoint Detection in the Presence of Outliers
+#' @references FPOP: Robert Maidstone, Toby Hocking, Guillem Rigaill, Paul Fearnhead (2014) On Optimal Multiple Changepoint Algorithms for Large Data
 #'
 #' @seealso PELT in parametric settings: \code{\link[changepoint]{cpt.mean}} for changes in the mean, \code{\link[changepoint]{cpt.var}} for changes in the variance and \code{\link[changepoint]{cpt.meanvar}} for changes in the mean and variance.
 #'
@@ -47,7 +49,7 @@
 #' }
 #'
 #'out <- cpt.np(data, penalty = "SIC",method="PELT",test.stat="empirical_distribution",
-#'              class=TRUE,minseglen=2, nquantiles =4*log(length(data)))
+#'              class=TRUE,minseglen=2, test.param =4*log(length(data)))
 #'cpts(out)
 #'
 #'#returns 100 130 150 230 250 400 440 650 760 780 810 as the changepoint locations.
@@ -55,7 +57,22 @@
 #'#Example 2 uses the heart rate data . 
 #'
 #'cptHeartRate <- cpt.np(HeartRate, penalty = "Manual", pen.value = 50, method="PELT",
-#'  test.stat="empirical_distribution",class=TRUE,minseglen=2, nquantiles =4*log(length(HeartRate)))
+#'  test.stat="empirical_distribution",class=TRUE,minseglen=2, test.param =4*log(length(HeartRate)))
+#' 
+#' 
+#' #Example 3
+#' 
+#' x <- c(rnorm(100), rnorm(100)+2)
+#' std.dev <- mad(diff(x)/sqrt(2))
+#' x_ <- x/std.dev
+#' lambda = log(length(x))
+#' res.l1 <- fpop_intern(x_,  "L1", pen.value=lambda)
+#' res.Hu <- fpop_intern(x_,  "Huber", pen.value=1.4*lambda, lthreshold=1.345)
+#' res.Ou <- fpop_intern(x_,  "Outlier", pen.value=2*lambda, lthreshold=3)
+#' plot(x_, pch=20)
+#' matlines(data.frame(res.l1$smt.signal, res.Hu$smt.signal, res.Ou$smt.signal), lty=2, lwd=2)
+#' }
+#' 
 #' 
 #' @useDynLib changepoint.np
 #' @import changepoint 
@@ -65,33 +82,63 @@
 #' @importFrom utils packageVersion
 #' @export
 
-cpt.np=function(data,penalty="MBIC",pen.value=0,method="PELT",test.stat="empirical_distribution",class=TRUE,minseglen=1, nquantiles = 10){
-  # checkData(data)
-  if(minseglen<1){minseglen=1;warning('Minimum segment length cannot be less than 1, automatically changed to be 1.')}
-  if((method == "PELT")&&(test.stat!="empirical_distribution")){ stop("Invalid test statistic, must be empirical_distribution")}
-
-  if(penalty == "CROPS"){
-    if(is.numeric(pen.value)){
-      if(length(pen.value) == 2){
-        if(pen.value[2] < pen.value[1]){
-          pen.value = rev(pen.value)
-        }
-        #run range of penalties
-        return(CROPS(data=data, method=method, pen.value=pen.value, test.stat=test.stat, class=class, minseglen=minseglen, nquantiles=nquantiles, func="nonparametric"))
-      }else{
-        stop('The length of pen.value must be 2')
-      }
-    }else{
-      stop('For CROPS, pen.value must be supplied as a numeric vector and must be of length 2')
+cpt.np=function(data,penalty="MBIC",pen.value=0,method="PELT",test.stat="empirical_distribution",
+                class=TRUE,minseglen=1, test.param = 10){
+                                        # checkData(data)
+    if(minseglen < 1){
+        minseglen = 1
+        warning('Minimum segment length cannot be less than 1, automatically changed to be 1.')
     }
-  }
-  else{
+    # Check for PELT method, and then run function depending on penalty.
     if(method == "PELT"){
-      return(multiple.nonparametric.ed(data,mul.method=method,penalty,pen.value,class,minseglen, nquantiles))
+        if(test.stat == "empirical_distribution"){
+                                        # if test.param not set, default is 10 for empirical distribution.
+            if( is.na(test.param) ){
+                test.param = 10
+            }
+                                        # Check if CROPS is penalty then do sanity checks for basic requirements.
+            if(penalty == "CROPS"){
+                
+                if(!is.numeric(pen.value)){
+                    stop('For CROPS, pen.value must be supplied as a numeric vector and must be of length 2')
+                }
+                
+                if(length(pen.value) != 2){
+                    stop('The length of pen.value must be 2')
+                }
+                
+                if(pen.value[2] < pen.value[1]){
+                    pen.value = rev(pen.value)
+                }
+                                        #run range of penalties
+                return(CROPS(data=data, method=method, pen.value=pen.value,
+                             test.stat=test.stat, class=class, minseglen=minseglen,
+                             nquantiles=test.param, func="nonparametric"))
+            }
+                                        # If CROPS is not the penalty, call multiple.nonparametric.ed, which
+                                        # contains further checks for valid penalties, so no need to repeat here.
+            else{
+                return(multiple.nonparametric.ed(data,mul.method=method,penalty,pen.value,class,
+                                                 minseglen, nquantiles=test.param))
+            }
+        }
+        else{
+            stop("Invalid test statistic, PELT must only be used with the empirical_distribution")            
+        }
+    }
+    # Check for rob.fpop method.
+    else if(method == "FPOP"){
+        # Error with message if test.statistic is not valid for method.
+        if( test.stat != "L1" &&
+            test.stat != "Huber" &&
+            test.stat != "Outlier"){
+            stop( "L1, Huber, and Outlier are the only allowed values of test.stat for method='FPOP'.")
+        }
+        
+        return(fpop_intern(data,test.stat=test.stat,pen.value,lthreshold=test.param,class=class))
     }
     else{
-      stop("Invalid Method, must be PELT")
+        stop("Invalid Method, only choice is PELT or FPOP.")
     }
-  }
+        
 }
-
