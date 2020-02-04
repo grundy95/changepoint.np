@@ -14,6 +14,9 @@ multiple.nonparametric.ed=function(data,mul.method="PELT",penalty="MBIC",pen.val
   else{
     n=ncol(data)
   }
+  if(minseglen>floor(n/2)){
+	  stop("Minimum segment length is too long to allow any changepoints")
+  }
 
   pen.value = penalty_decision(penalty, pen.value, n, diffparam, method=mul.method)
 

@@ -5,6 +5,9 @@ range_of_penalties <- function(sumstat,cost = "empirical_distribution",PELT = T,
   NCALC=0
   pen_interval <- c(min_pen,max_pen)
   n = dim(sumstat)[2]-1
+  if(minseglen>floor(n/2)){
+	  stop("Minimum segment length is too long to allow any changepoints")
+  }
 
   test_penalties <- NULL
   numberofchangepoints <- NULL
